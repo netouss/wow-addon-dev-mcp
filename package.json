@@ -1,0 +1,43 @@
+{
+  "name": "wow-addon-dev-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for World of Warcraft addon development — Blizzard API docs, FrameXML search, TOC validation, deprecation scanner, and addon scaffolding",
+  "type": "module",
+  "bin": {
+    "wow-addon-dev-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint src/",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "world-of-warcraft",
+    "wow",
+    "addon",
+    "blizzard",
+    "github-copilot",
+    "lua"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<your-username>/wow-addon-dev-mcp.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
