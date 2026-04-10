@@ -72,7 +72,7 @@ export class WowUiSourceSearcher {
 
   /** List all Blizzard addons in wow-ui-source */
   async listAddons(): Promise<string[]> {
-    let entries: Awaited<ReturnType<typeof readdir>>;
+    let entries: string[];
     try {
       entries = await readdir(this.addonsPath);
     } catch {
