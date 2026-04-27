@@ -6,10 +6,11 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that g
 
 ## Features
 
-- **12 tools** covering API lookup, FrameXML search, TOC validation, deprecation checks, and addon scaffolding
+- **15 tools** — API lookup, FrameXML search, mixin/template finder, CVar lookup, TOC validation, Lua linting, deprecation checks, and addon scaffolding
+- **3 MCP prompts** — reusable Copilot workflows (`review-addon`, `migrate-to-modern-api`, `design-secure-frame`)
 - **No network calls** — all data comes from your local `wow-ui-source` clone
-- **Graceful degradation** — tools that do not need `wow-ui-source` work immediately (TOC validation, deprecation scanner, addon scaffolding)
-- **Lazy loading** — API documentation (~700 files) is parsed only on first access
+- **Graceful degradation** — tools that do not need `wow-ui-source` work immediately (TOC validation, Lua linter, deprecation scanner, addon scaffolding)
+- **Lazy loading** — API documentation (~700 files), the mixin index, and the CVar index are parsed only on first access
 
 ---
 
@@ -76,7 +77,7 @@ Reload VS Code — the `wow-addon-dev` server will appear in Copilot's tool list
 
 ---
 
-## Tools Reference (12 tools)
+## Tools Reference (15 tools)
 
 Tools marked **[requires wow-ui-source]** need `WOW_UI_SOURCE_PATH` to be configured. All other tools work out of the box.
 
@@ -235,19 +236,78 @@ Get methods available on a UI widget type.
 
 ---
 
+### 13. `lint_addon_lua`
+Static-analysis lint for addon Lua code. Pure pattern matching — works without `wow-ui-source`.
+
+**Use case:** Paste any `*.lua` and get a prioritized list of risky patterns.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `luaCode` | string | Lua source to lint |
+| `rules` | string[]? | Optional rule allow-list. Pass `["__list__"]` to discover available rules. |
+
+**Built-in rules** include: `no-getglobal`, `no-this-keyword`, `secure-call-needs-combat-check` (suppressed when an `InCombatLockdown()` guard is nearby), `onupdate-without-throttle`, `register-unfiltered-unit-event`, `register-without-handler` (skipped when a `self[event]` dispatcher is detected), `global-leak-uppercase`, `missing-addon-namespace`, and more.
+
+---
+
+### 14. `find_mixin_template` [requires wow-ui-source]
+Locate Blizzard mixin and XML template definitions to learn how to extend the UI.
+
+**Use case:** "Where is `SecureActionButtonTemplate` declared?"
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Substring of mixin/template name |
+| `kind` | `"Mixin"`\|`"Template"`\|`"Frame"`\|`"all"`? | Filter |
+| `limit` | number? | Max results (default 25) |
+
+**Returns:** `name`, `kind`, `file`, `line`, `inherits[]`, source `snippet`.
+
+---
+
+### 15. `lookup_cvar` [requires wow-ui-source]
+Discover WoW console variables (CVars) by scanning `RegisterCVar` / `SetCVar` / `GetCVar` / `C_CVar.*` calls in `wow-ui-source`.
+
+**Use case:** "Find every CVar related to nameplates."
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | CVar substring |
+| `detail` | boolean? | If true, return individual references instead of a summary |
+
+**Returns (summary mode):** CVar name, default value (when discoverable), reference count, and the top files that touch it.
+
+---
+
+## Prompts (3)
+
+MCP prompts are reusable instructions Copilot can invoke alongside tools.
+
+| Prompt | Argument | Purpose |
+|--------|----------|---------|
+| `review-addon` | `luaCode` | Run `lint_addon_lua` then `check_api_deprecation` and produce a prioritized fix list. |
+| `migrate-to-modern-api` | `luaCode` | Convert legacy globals to the current `C_*` namespaces using `check_api_deprecation` + `suggest_api_migration`. |
+| `design-secure-frame` | `intent` | Plan a combat-safe secure frame (templates, attributes, `InCombatLockdown` guards). |
+
+---
+
 ## Architecture
 
 ```
 wow-addon-dev-mcp/
 ├── src/
-│   ├── index.ts                    # MCP server entry — all 12 tool registrations
+│   ├── index.ts                    # MCP server entry — registers all tools and prompts
 │   ├── parsers/
 │   │   ├── blizzard-api-doc.ts     # Parses 700+ Blizzard_APIDocumentationGenerated Lua files
 │   │   └── wow-ui-source.ts        # Searches FrameXML source code
 │   └── tools/
 │       ├── addon-scaffold.ts       # Generates addon boilerplate
 │       ├── api-migration.ts        # Deprecation checking + migration suggestions
+│       ├── cvar-searcher.ts        # CVar discovery from wow-ui-source
+│       ├── lua-linter.ts           # Static analysis for addon Lua
+│       ├── mixin-finder.ts         # Mixin / template / virtual frame finder
 │       └── toc-validator.ts        # TOC file validation
+├── tests/                          # vitest unit tests
 ├── dist/                           # Compiled JS output (git-ignored)
 ├── .env.example                    # Environment variable template
 ├── package.json

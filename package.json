@@ -1,6 +1,6 @@
 {
   "name": "wow-addon-dev-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for World of Warcraft addon development — Blizzard API docs, FrameXML search, TOC validation, deprecation scanner, and addon scaffolding",
   "type": "module",
   "bin": {

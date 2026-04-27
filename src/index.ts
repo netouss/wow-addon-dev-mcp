@@ -6,10 +6,13 @@ import { WowUiSourceSearcher } from "./parsers/wow-ui-source.js";
 import { TocValidator } from "./tools/toc-validator.js";
 import { AddonScaffold } from "./tools/addon-scaffold.js";
 import { ApiMigration } from "./tools/api-migration.js";
+import { LuaLinter } from "./tools/lua-linter.js";
+import { MixinTemplateFinder } from "./tools/mixin-finder.js";
+import { CVarSearcher } from "./tools/cvar-searcher.js";
 
 const server = new McpServer({
   name: "wow-addon-dev-mcp",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 // Paths configured via environment variables (all optional — tools degrade gracefully)
@@ -19,6 +22,8 @@ const ADDONS_WORKSPACE_PATH = process.env.ADDONS_WORKSPACE_PATH ?? "";
 // --- Lazy-loaded singletons ---
 let apiDocParser: BlizzardApiDocParser | null = null;
 let uiSourceSearcher: WowUiSourceSearcher | null = null;
+let mixinFinder: MixinTemplateFinder | null = null;
+let cvarSearcher: CVarSearcher | null = null;
 
 /** Message returned by tools that require WOW_UI_SOURCE_PATH when it is not set. */
 const WOW_UI_SOURCE_REQUIRED_MSG =
@@ -49,6 +54,22 @@ function tryGetUiSourceSearcher(): WowUiSourceSearcher | null {
     uiSourceSearcher = new WowUiSourceSearcher(WOW_UI_SOURCE_PATH);
   }
   return uiSourceSearcher;
+}
+
+function tryGetMixinFinder(): MixinTemplateFinder | null {
+  if (!WOW_UI_SOURCE_PATH) return null;
+  if (!mixinFinder) {
+    mixinFinder = new MixinTemplateFinder(WOW_UI_SOURCE_PATH);
+  }
+  return mixinFinder;
+}
+
+function tryGetCVarSearcher(): CVarSearcher | null {
+  if (!WOW_UI_SOURCE_PATH) return null;
+  if (!cvarSearcher) {
+    cvarSearcher = new CVarSearcher(WOW_UI_SOURCE_PATH);
+  }
+  return cvarSearcher;
 }
 
 /** Convenience helper: returns a MCP text-content error response. */
@@ -316,6 +337,131 @@ server.tool(
       content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
     };
   }
+);
+
+// ═══════════════════════════════════════════════════════════
+// TOOL 13: lint_addon_lua — Static analysis for addon Lua
+// ═══════════════════════════════════════════════════════════
+server.tool(
+  "lint_addon_lua",
+  "Lint a WoW addon Lua source file for common pitfalls (deprecated globals, missing combat checks, OnUpdate without throttling, unfiltered unit events, leaked globals, missing event handlers, etc.). Pure pattern analysis — no wow-ui-source required.",
+  {
+    luaCode: z.string().describe("Lua source code to lint"),
+    rules: z.array(z.string()).optional().describe("Optional list of rule names to enable (default: all). Use '__list__' to discover rules."),
+  },
+  async ({ luaCode, rules }) => {
+    const linter = new LuaLinter();
+    if (rules?.length === 1 && rules[0] === "__list__") {
+      return { content: [{ type: "text", text: JSON.stringify(linter.listRules(), null, 2) }] };
+    }
+    const results = linter.lint(luaCode, { rules });
+    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+  }
+);
+
+// ═══════════════════════════════════════════════════════════
+// TOOL 14: find_mixin_template — Locate mixins/templates
+// ═══════════════════════════════════════════════════════════
+server.tool(
+  "find_mixin_template",
+  "Find Blizzard mixin or XML template definitions in wow-ui-source by name. Returns file/line and inheritance chain so you can quickly study how to extend a Blizzard widget.",
+  {
+    name: z.string().describe("Mixin or template name (e.g. 'ButtonMixin', 'UIPanelButtonTemplate'). Substring match."),
+    kind: z.enum(["Mixin", "Template", "Frame", "all"]).optional().describe("Filter by kind (default: all)"),
+    limit: z.number().optional().describe("Max results (default: 25)"),
+  },
+  async ({ name, kind, limit }) => {
+    const finder = tryGetMixinFinder();
+    if (!finder) return missingSourceError();
+    const results = await finder.find(name, { kind, limit });
+    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+  }
+);
+
+// ═══════════════════════════════════════════════════════════
+// TOOL 15: lookup_cvar — Search WoW console variables
+// ═══════════════════════════════════════════════════════════
+server.tool(
+  "lookup_cvar",
+  "Look up WoW console variables (CVars) referenced in wow-ui-source. Returns the CVar name, default value when discoverable, and the files that read or write it.",
+  {
+    name: z.string().describe("CVar name to search (substring, case-insensitive)"),
+    detail: z.boolean().optional().describe("If true, return every individual reference instead of a summary"),
+  },
+  async ({ name, detail }) => {
+    const searcher = tryGetCVarSearcher();
+    if (!searcher) return missingSourceError();
+    const results = detail ? await searcher.getReferences(name) : await searcher.search(name);
+    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+  }
+);
+
+// ═══════════════════════════════════════════════════════════
+// PROMPTS — reusable Copilot workflows
+// ═══════════════════════════════════════════════════════════
+server.prompt(
+  "review-addon",
+  "Run a structured review of an addon source file: lint, deprecation scan, and conventions check.",
+  {
+    luaCode: z.string().describe("Lua source code to review"),
+  },
+  ({ luaCode }) => ({
+    messages: [
+      {
+        role: "user",
+        content: {
+          type: "text",
+          text:
+            "Review the following WoW addon Lua source. Use the `lint_addon_lua` tool, then `check_api_deprecation`, then summarize findings grouped by severity (errors → warnings → info). At the end, propose concrete code patches for the top 3 issues.\n\n```lua\n" +
+            luaCode +
+            "\n```",
+        },
+      },
+    ],
+  })
+);
+
+server.prompt(
+  "migrate-to-modern-api",
+  "Migrate legacy WoW Lua to the current C_* namespaces with explanations.",
+  {
+    luaCode: z.string().describe("Legacy Lua source to migrate"),
+  },
+  ({ luaCode }) => ({
+    messages: [
+      {
+        role: "user",
+        content: {
+          type: "text",
+          text:
+            "Migrate this WoW addon Lua to the latest game APIs. Steps: (1) call `check_api_deprecation`, (2) for each deprecation call `suggest_api_migration`, (3) produce a unified diff updating the source. Preserve formatting, comments, and locale strings.\n\n```lua\n" +
+            luaCode +
+            "\n```",
+        },
+      },
+    ],
+  })
+);
+
+server.prompt(
+  "design-secure-frame",
+  "Plan a combat-safe secure frame for a given action (e.g. cast a spell, use an item).",
+  {
+    intent: z.string().describe("What the secure frame should do (e.g. 'one-button cast Healthstone')"),
+  },
+  ({ intent }) => ({
+    messages: [
+      {
+        role: "user",
+        content: {
+          type: "text",
+          text:
+            "Design a combat-safe secure frame for the following intent. Use `find_mixin_template` to locate `SecureActionButtonTemplate` and any related templates, `get_widget_api` to confirm available methods, and produce: (1) the XML/Lua skeleton, (2) the SetAttribute calls, (3) the InCombatLockdown guard pattern, (4) any required taint-avoidance notes.\n\nIntent: " +
+            intent,
+        },
+      },
+    ],
+  })
 );
 
 // --- Start the server ---
